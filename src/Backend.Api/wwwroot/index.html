@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Moisture Dashboard (PoC)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #devices { display:flex; gap:12px; flex-wrap:wrap }
+    .card { border:1px solid #ddd; padding:12px; width:220px; border-radius:6px; cursor:pointer }
+    .val { font-size:24px; font-weight:700 }
+    #detail { margin-top:20px; border:1px solid #eee; padding:12px; display:none }
+    label { display:block; margin-top:8px }
+    input[type=text] { width:100% }
+    button { margin-top:8px }
+  </style>
+</head>
+<body>
+  <h1>Moisture Dashboard (PoC)</h1>
+  <div>
+    <label>API base: <input id="apiBase" value="/api" size="40"></label>
+    <button id="refresh">Refresh now</button>
+  </div>
+  <h2>Devices</h2>
+  <div id="devices">Loading...</div>
+
+  <div id="detail">
+    <h3 id="detail-title"></h3>
+    <div id="detail-latest"></div>
+    <div id="detail-ota">OTA status: <span id="ota-status">n/a</span></div>
+    <h4>Trigger OTA</h4>
+    <label>Version <input id="ota-version" type="text"></label>
+    <label>Firmware URL <input id="ota-url" type="text"></label>
+    <label>Checksum (optional) <input id="ota-checksum" type="text"></label>
+    <button id="ota-send">Send OTA</button>
+    <button id="ota-refresh">Refresh OTA status</button>
+    <button id="close-detail">Close</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@6.0.0/dist/browser/signalr.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

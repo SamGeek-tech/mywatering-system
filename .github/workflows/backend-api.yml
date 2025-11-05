@@ -1,0 +1,47 @@
+name: Build and Deploy Backend API
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '6.0.x'
+      - name: Restore
+        run: dotnet restore src/Backend.Api/Backend.Api.csproj
+      - name: Build
+        run: dotnet build src/Backend.Api/Backend.Api.csproj --configuration Release --no-restore
+      - name: Run tests
+        run: |
+          dotnet test tests/Backend.Tests/Backend.Tests.csproj --no-build --verbosity normal
+      - name: Publish
+        run: dotnet publish src/Backend.Api/Backend.Api.csproj -c Release -o publish
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-api-publish
+          path: src/Backend.Api/publish/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-api-publish
+          path: publish
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.WEBAPP_NAME }}
+          publish-profile: ${{ secrets.WEBAPP_PUBLISH_PROFILE }}
+          package: publish

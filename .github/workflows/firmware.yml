@@ -1,0 +1,24 @@
+name: Build Firmware (PoC)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup ESP-IDF (if required)
+        uses: espressif/actions/setup-esp-idf@v2
+        if: always()
+      - name: Build (placeholder)
+        run: |
+          echo "Build firmware here (PlatformIO or idf.py). This placeholder does nothing in PoC."
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-bin
+          path: build/firmware.bin

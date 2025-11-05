@@ -1,0 +1,103 @@
+name: Deploy Infrastructure (Bicep)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Deploy Bicep
+        id: deploy
+        run: |
+          az group deployment create -g ${{ secrets.AZURE_RESOURCE_GROUP }} --template-file infra/bicep/main.bicep --parameters prefix='wateringpoc' --name wateringpoc-deploy
+      - name: Get outputs
+        id: outputs
+        run: |
+          rg=${{ secrets.AZURE_RESOURCE_GROUP }}
+          deployName=wateringpoc-deploy
+          funcName=$(az deployment group show -g $rg --name $deployName --query properties.outputs.functionAppName.value -o tsv)
+          kvName=$(az deployment group show -g $rg --name $deployName --query properties.outputs.keyVaultName.value -o tsv)
+          iothubName=$(az deployment group show -g $rg --name $deployName --query properties.outputs.iothubName.value -o tsv)
+          secretStorageId=$(az deployment group show -g $rg --name $deployName --query properties.outputs.secretStorageId.value -o tsv)
+          secretCosmosId=$(az deployment group show -g $rg --name $deployName --query properties.outputs.secretCosmosId.value -o tsv)
+          secretSignalrId=$(az deployment group show -g $rg --name $deployName --query properties.outputs.secretSignalrId.value -o tsv)
+          msiPrincipal=$(az deployment group show -g $rg --name $deployName --query properties.outputs.functionIdentityPrincipalId.value -o tsv)
+          storageName=$(az deployment group show -g $rg --name $deployName --query properties.outputs.storageAccountName.value -o tsv)
+          cosmosName=$(az deployment group show -g $rg --name $deployName --query properties.outputs.cosmosName.value -o tsv)
+          dpsName=$(az deployment group show -g $rg --name $deployName --query properties.outputs.dpsName.value -o tsv)
+          echo "funcName=$funcName" >> $GITHUB_OUTPUT
+          echo "kvName=$kvName" >> $GITHUB_OUTPUT
+          echo "iothubName=$iothubName" >> $GITHUB_OUTPUT
+          echo "secretStorageId=$secretStorageId" >> $GITHUB_OUTPUT
+          echo "secretCosmosId=$secretCosmosId" >> $GITHUB_OUTPUT
+          echo "secretSignalrId=$secretSignalrId" >> $GITHUB_OUTPUT
+          echo "msiPrincipal=$msiPrincipal" >> $GITHUB_OUTPUT
+          echo "storageName=$storageName" >> $GITHUB_OUTPUT
+          echo "cosmosName=$cosmosName" >> $GITHUB_OUTPUT
+          echo "dpsName=$dpsName" >> $GITHUB_OUTPUT
+      - name: Create IoT Hub service policy and get connection string
+        run: |
+          set -e
+          rg=${{ secrets.AZURE_RESOURCE_GROUP }}
+          iothubName=${{ steps.outputs.outputs.iothubName }}
+          az iot hub policy create --name servicePolicy --hub-name $iothubName --permissions RegistryRead ServiceConnect DeviceConnect || true
+          conn=$(az iot hub connection-string show --hub-name $iothubName --policy-name servicePolicy --query connectionString -o tsv)
+          echo "IOTHUB_CONN=$conn" >> $GITHUB_ENV
+      - name: Link DPS to IoT Hub
+        run: |
+          set -e
+          rg=${{ secrets.AZURE_RESOURCE_GROUP }}
+          dpsName=${{ steps.outputs.outputs.dpsName }}
+          iothubName=${{ steps.outputs.outputs.iothubName }}
+          az iot dps linked-hub create --dps-name $dpsName --resource-group $rg --connection-string "$IOTHUB_CONN" --location $(az group show -n $rg --query location -o tsv) --name $iothubName
+      - name: Assign roles to managed identity
+        run: |
+          rg=${{ secrets.AZURE_RESOURCE_GROUP }}
+          msiPrincipal=${{ steps.outputs.outputs.msiPrincipal }}
+          storageName=${{ steps.outputs.outputs.storageName }}
+          cosmosName=${{ steps.outputs.outputs.cosmosName }}
+
+          az role assignment create --assignee-object-id $msiPrincipal --assignee-principal-type ServicePrincipal --role "Storage Blob Data Contributor" --scope /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$rg/providers/Microsoft.Storage/storageAccounts/$storageName
+
+          az role assignment create --assignee-object-id $msiPrincipal --assignee-principal-type ServicePrincipal --role "Cosmos DB Built-in Data Contributor" --scope /subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/$rg/providers/Microsoft.DocumentDB/databaseAccounts/$cosmosName
+      - name: Configure Function App settings to reference Key Vault
+        run: |
+          rg=${{ secrets.AZURE_RESOURCE_GROUP }}
+          funcName=${{ steps.outputs.outputs.funcName }}
+          secretStorageId=${{ steps.outputs.outputs.secretStorageId }}
+          secretCosmosId=${{ steps.outputs.outputs.secretCosmosId }}
+          secretSignalrId=${{ steps.outputs.outputs.secretSignalrId }}
+
+          az webapp config appsettings set -g $rg -n $funcName --settings \
+            AzureWebJobsStorage="@Microsoft.KeyVault(SecretUri=${secretStorageId})" \
+            CosmosConnectionString="@Microsoft.KeyVault(SecretUri=${secretCosmosId})" \
+            RAW_BLOB_CONNECTIONSTRING="@Microsoft.KeyVault(SecretUri=${secretStorageId})" \
+            SIGNALR_CONNECTIONSTRING="@Microsoft.KeyVault(SecretUri=${secretSignalrId})" \
+            IOTHUB_CONNECTIONSTRING="$IOTHUB_CONN"
+        env:
+          AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Upload provisioning scripts as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: provisioning-scripts
+          path: scripts
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/*.sh
+      - name: Provision gateway device (optional)
+        if: always()
+        run: |
+          rg=${{ secrets.AZURE_RESOURCE_GROUP }}
+          iothubName=${{ steps.outputs.outputs.iothubName }}
+          ./scripts/provision-gateway.sh $iothubName gateway-001
+      - name: Provision DPS link and show guidance
+        run: |
+          echo "DPS linked to IoT Hub. To provision devices via DPS, use the 'provision-device.sh' script or device SDKs."

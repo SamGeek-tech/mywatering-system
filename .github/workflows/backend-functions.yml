@@ -1,0 +1,56 @@
+name: Build and Publish Backend Functions
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Restore
+        run: dotnet restore src/Backend.Functions/Backend.Functions.csproj
+
+      - name: Build
+        run: dotnet build src/Backend.Functions/Backend.Functions.csproj --configuration Release --no-restore
+
+      - name: Test
+        run: |
+          if [ -d "tests" ]; then dotnet test --no-build --verbosity normal; else echo "No tests found"; fi
+
+      - name: Publish Function
+        run: dotnet publish src/Backend.Functions/Backend.Functions.csproj -c Release -o publish
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-functions-publish
+          path: src/Backend.Functions/publish/
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-functions-publish
+          path: publish
+
+      - name: Deploy to Azure Functions
+        uses: azure/functions-action@v1
+        with:
+          app-name: ${{ secrets.FUNCTIONAPP_NAME }}
+          publish-profile: ${{ secrets.FUNCTIONAPP_PUBLISH_PROFILE }}
+          package: publish
