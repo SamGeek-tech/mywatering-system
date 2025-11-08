@@ -1,0 +1,7 @@
+{
+  "SSID": "YOUR_SSID",
+  "PASSWORD": "YOUR_PASSWORD",
+  "IOTHUB_HOST": "myiothub.azure-devices.net",
+  "DEVICE_ID": "esp32-gateway",
+  "SAS_TOKEN": "SharedAccessSignature sr=..."
+}
