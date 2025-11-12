@@ -1,0 +1,13 @@
+Build filesystem image:
+
+pio run -t buildfs -e d1_mini32
+
+
+Upload filesystem:
+
+pio run -t uploadfs -e d1_mini32
+
+
+Upload firmware:
+
+pio run -t upload -e d1_mini32

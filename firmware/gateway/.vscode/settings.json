@@ -4,6 +4,7 @@
         "set": "cpp",
         "map": "cpp",
         "vector": "cpp",
-        "typeinfo": "cpp"
+        "typeinfo": "cpp",
+        "string": "cpp"
     }
 }

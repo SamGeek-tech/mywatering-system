@@ -1,0 +1,15 @@
+{
+  "mode":"gateway",
+  "SSID":"",
+  "PASSWORD":"",
+  "IOTHUB_HOST":"myiothub.azure-devices.net",
+  "DEVICE_ID":"ESP32_01",
+  "SAS_TOKEN":"SharedAccessSignature...",
+  "PROTOCOL":"http",
+  "firmwareUrl":"",
+  "sleepSeconds":60,
+  "sensors":[
+    {"name":"Soil1","type":"cap_soil_moisture","pin":34,"air_value":4095,"water_value":0},
+    {"name":"DHT1","type":"dht22","pin":35}
+  ]
+}

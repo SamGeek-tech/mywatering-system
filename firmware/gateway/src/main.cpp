@@ -1,5 +1,5 @@
 /********************************************************************* 
- * ESP32 / ESP8266 – painlessMesh + Azure IoT + Deep Sleep
+ * ESP32 / ESP8266 – painlessMesh + Azure IoT + Deep Sleep + OTA
  * -------------------------------------------------------
  * • One binary: ESP32 & ESP8266
  * • Gateway: Wi-Fi to Azure (HTTP/MQTT/SDK)
@@ -20,56 +20,54 @@
 #include <set>
 #include <map>
 #include <vector>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include <LittleFS.h>
+#define FS_TYPE LittleFS
+#define FS_OPEN(path, mode) LittleFS.open(path, mode)
+#define FS_EXISTS(path) LittleFS.exists(path)
+#define FS_REMOVE(path) LittleFS.remove(path)
 
 #if defined(ESP32)
-  #include <WiFi.h>
-  #include <WiFiClientSecure.h>
-  #include <AsyncTCP.h>
-  #include <ESPAsyncWebServer.h>
-  #include "AzureIotHub.h"
-  #include "Esp32MQTTClient.h"
-  #include <HTTPClient.h>
-  #include <SPIFFS.h>
-  #define FS_TYPE SPIFFS
-  #define FS_BEGIN() SPIFFS.begin(true)
-  #define FS_OPEN(path, mode) SPIFFS.open(path, mode)
-  #define FS_EXISTS(path) SPIFFS.exists(path)
-  #define FS_REMOVE(path) SPIFFS.remove(path)
-  #define RTC_ATTR RTC_DATA_ATTR
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
+#include <HTTPClient.h>
+#include <HTTPUpdate.h>
+#include "AzureIotHub.h"
+#include "Esp32MQTTClient.h"
+#define FS_BEGIN() LittleFS.begin(true, "/littlefs")   // MOUNT AT ROOT
+#define RTC_ATTR RTC_DATA_ATTR
   #define HTTP_CLIENT HTTPClient
   #define WebRequest AsyncWebServerRequest
   #define PIN_BOOT 0
   #define BATTERY_PIN 34
-
 #elif defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <ESPAsyncTCP.h>
   #include <ESPAsyncWebServer.h>
   #include <ESP8266httpUpdate.h>
   #include <ESP8266HTTPClient.h>
-  #include <LittleFS.h>
-  #include <user_interface.h>   // for system_get_rtc_mem
-  #define FS_TYPE LittleFS
+  #include <user_interface.h>
   #define FS_BEGIN() LittleFS.begin()
-  #define FS_OPEN(path, mode) LittleFS.open(path, mode)
-  #define FS_EXISTS(path) LittleFS.exists(path)
-  #define FS_REMOVE(path) LittleFS.remove(path)
-  #define RTC_ATTR            // ESP8266 has no RTC_DATA_ATTR
+  #define RTC_ATTR
   #define HTTP_CLIENT HTTPClient
   #define WebRequest AsyncWebServerRequest
   #define PIN_BOOT 0
   #define BATTERY_PIN A0
-
 #else
   #error "Unsupported platform"
 #endif
 
 #include <PubSubClient.h>
+#include <DNSServer.h>
+DNSServer dnsServer;
 
 // --- CONSTANTS ---
-#define FIRMWARE_VERSION "1.3.3"
+#define FIRMWARE_VERSION "1.3.4"
 #define AP_SSID "ESP_Config"
-#define AP_PASSWORD "12345678"
+#define AP_PASSWORD "admin123"
 #define CONFIG_TIMEOUT_MS 300000
 #define MESH_PREFIX "MESH_"
 #define MESH_PASSWORD "meshpass"
@@ -109,6 +107,9 @@ unsigned long g_buttonPressTime = 0;
 #endif
 unsigned long lastReconnectAttempt = 0;
 
+// Add this global
+bool g_meshInitialized = false;
+
 // --- SENSORS ---
 struct Sensor {
   String name, type;
@@ -126,17 +127,193 @@ std::vector<Sensor> g_sensors;
 std::map<int, OneWire*> g_onewire_map;
 std::map<int, DallasTemperature*> g_dallas_map;
 
-// --- HTML CONFIG PAGE ---
-const char* configHtml = R"raw(
+// --- FORWARD DECLARATIONS ---
+void forwardToIoTHub(const String &payload);
+void meshReceivedCallback(uint32_t from, String &msg);
+void clearSensors();
+void readConfig();
+bool connectSTA();
+void startAPMode();
+void setupMesh();
+#ifdef ESP32
+void setupIoTHub();
+void checkOTA();
+#endif
+
+void setupWebServer();
+
+// --- MESH CALLBACK ---
+void meshReceivedCallback(uint32_t from, String &msg) {
+  if (g_mode != DeviceMode::GATEWAY) return;
+  JsonDocument doc;
+  if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
+  doc["rssi"] = WiFi.RSSI();
+  String out; serializeJson(doc, out);
+  forwardToIoTHub(out);
+}
+
+// --- CONFIG FUNCTIONS ---
+void clearSensors() {
+  g_sensors.clear();
+  for (auto &p : g_onewire_map) delete p.second;
+  for (auto &p : g_dallas_map) delete p.second;
+  g_onewire_map.clear(); g_dallas_map.clear();
+}
+
+void readConfig() {
+  clearSensors();
+  if (!FS_BEGIN()) return;
+  File f = FS_OPEN("/config.json", "r");
+  if (!f) return;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, f) != DeserializationError::Ok) { f.close(); return; }
+  f.close();
+
+
+  String mode = doc["mode"] | "gateway";
+  g_mode = (mode == "node") ? DeviceMode::NODE : DeviceMode::GATEWAY;
+  g_ssid = doc["SSID"] | "";
+  g_password = doc["PASSWORD"] | "";
+  g_iothubHost = doc["IOTHUB_HOST"] | "";
+  g_deviceId = doc["DEVICE_ID"] | "";
+  g_sasToken = doc["SAS_TOKEN"] | "";
+  g_protocol = doc["PROTOCOL"] | "http";
+  g_firmwareUrl = doc["firmwareUrl"] | "";
+  g_sleepSeconds = doc["sleepSeconds"] | 60;
+
+  for (JsonObject obj : doc["sensors"].as<JsonArray>()) {
+    Sensor s;
+    s.name = obj["name"] | "";
+    s.type = obj["type"] | "";
+    s.pin = obj["pin"] | 0;
+    if (s.type == "cap_soil_moisture") {
+      s.air_value = obj["air_value"] | 4095;
+      s.water_value = obj["water_value"] | 0;
+    } else if (s.type == "dht22") {
+      s.dht = new DHT(s.pin, DHT22); s.dht->begin();
+    } else if (s.type == "ds18b20") {
+      s.index = obj["index"] | 0;
+      if (g_dallas_map.find(s.pin) == g_dallas_map.end()) {
+        OneWire* ow = new OneWire(s.pin);
+        DallasTemperature* dt = new DallasTemperature(ow);
+        dt->begin();
+        g_onewire_map[s.pin] = ow;
+        g_dallas_map[s.pin] = dt;
+      }
+      s.oneWire = g_onewire_map[s.pin];
+      s.sensors = g_dallas_map[s.pin];
+    } else if (s.type == "bme280") {
+      s.address = obj["address"] | 0x76;
+      s.bme = new Adafruit_BME280();
+      s.bme->begin(s.address);
+    } else if (s.type == "bmp280") {
+      s.address = obj["address"] | 0x76;
+      s.bmp = new Adafruit_BMP280();
+      s.bmp->begin(s.address);
+    }
+    g_sensors.push_back(s);
+  }
+  g_configValid = true && !g_ssid.isEmpty() && !g_password.isEmpty() && !g_deviceId.isEmpty();
+}
+
+// --- WIFI ---
+bool connectSTA() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(g_ssid.c_str(), g_password.c_str());
+  uint8_t attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+    delay(500); attempts++;
+  }
+  return WiFi.status() == WL_CONNECTED;
+}
+
+void startAPMode() {
+  Serial.println("[AP] Starting AP mode...");
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
+  WiFi.softAP(AP_SSID, AP_PASSWORD);
+
+  dnsServer.start(53, "*", WiFi.softAPIP());
+
+  // if (!FS_BEGIN()) {
+  //   Serial.println("[AP] LittleFS failed! Formatting...");
+  //   LittleFS.format();  // Works on both ESP32 & ESP8266
+  //   if (FS_BEGIN()) {
+  //     Serial.println("[AP] LittleFS formatted & mounted");
+  //   } else {
+  //     Serial.println("[AP] LittleFS still failed!");
+  //   }
+  // }
+
+  setupWebServer();
+
+  g_apMode = true;
+  g_apStartTime = millis();
+  Serial.printf("[AP] Open: http://%s\n", WiFi.softAPIP().toString().c_str());
+}
+
+// --- MESH ---
+// In setupMesh()
+void setupMesh() {
+  mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
+  mesh.init(MESH_PREFIX + g_deviceId, MESH_PASSWORD, MESH_PORT);
+  mesh.onReceive(&meshReceivedCallback);
+  g_meshInitialized = true;  // Mark as ready
+}
+
+// --- IOT HUB ---
+#ifdef ESP32
+void setupIoTHub() {
+  if (g_protocol == "mqtt") {
+    mqttClient.setServer(g_iothubHost.c_str(), 8883);
+  } else if (g_protocol == "sdk") {
+    if (platform_init() != 0) return;
+    String conn = "HostName=" + g_iothubHost + ";DeviceId=" + g_deviceId +
+                  ";SharedAccessSignature=" + g_sasToken;
+    g_iotHubClient = IoTHubClient_LL_CreateFromConnectionString(conn.c_str(), MQTT_Protocol);
+    if (g_iotHubClient) {
+      IoTHubClient_LL_SetRetryPolicy(g_iotHubClient, IOTHUB_CLIENT_RETRY_EXPONENTIAL_BACKOFF_WITH_JITTER, 0);
+    }
+  }
+}
+
+void checkOTA() {
+  if (g_firmwareUrl.length() < 10) return;
+  Serial.println("[OTA] Checking for firmware at: " + g_firmwareUrl);
+  espClient.setInsecure();
+  t_httpUpdate_return ret = httpUpdate.update(espClient, g_firmwareUrl);
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      Serial.printf("[OTA] Failed: %d %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("[OTA] No update available");
+      break;
+    case HTTP_UPDATE_OK:
+      Serial.println("[OTA] Update applied successfully. Rebooting...");
+      break;
+  }
+}
+#endif
+
+
+// --- WEB SERVER ---
+void setupWebServer() {
+  String html = R"raw(
 <!DOCTYPE html><html><head><title>ESP Config</title></head><body>
 <h2>Mode</h2><select id="mode"><option value="gateway">Gateway</option><option value="node">Node</option></select><br>
 <h2>Wi-Fi</h2>SSID:<input id="SSID"><br>Password:<input type="password" id="PASSWORD"><br>
 <h2>Azure</h2>Host:<input id="IOTHUB_HOST"><br>Device ID:<input id="DEVICE_ID"><br>
 SAS Token:<input type="password" id="SAS_TOKEN"><br>
 Protocol:<select id="PROTOCOL"><option value="http">HTTP</option><option value="mqtt">MQTT</option>
+)raw";
+
 #ifdef ESP32
-<option value="sdk">SDK</option>
+  html += "<option value=\"sdk\">SDK</option>";
 #endif
+
+  html += R"raw(
 </select><br>
 OTA URL:<input id="firmwareUrl"><br>Sleep (s):<input type="number" id="sleepSeconds" value="60" min="10"><br>
 <h2>Sensors</h2><div id="sensors"></div><button onclick="add()">+ Sensor</button><br><br>
@@ -173,159 +350,42 @@ function save(){
 </script></body></html>
 )raw";
 
-// --- FORWARD DECLARATIONS ---
-void forwardToIoTHub(const String &payload);
-void meshReceivedCallback(uint32_t from, String &msg);
-void clearSensors();
-void readConfig();
-bool connectSTA();
-void startAPMode();
-void setupMesh();
-#ifdef ESP32
-void setupIoTHub();
-#endif
-void setupWebServer();
-
-// --- MESH CALLBACK ---
-void meshReceivedCallback(uint32_t from, String &msg) {
-  if (g_mode != DeviceMode::GATEWAY) return;
-  JsonDocument doc;
-  if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
-  doc["rssi"] = WiFi.RSSI();
-  String out; serializeJson(doc, out);
-  forwardToIoTHub(out);
-}
-
-// --- CONFIG ---
-void clearSensors() {
-  g_sensors.clear();
-  for (auto &p : g_onewire_map) delete p.second;
-  for (auto &p : g_dallas_map) delete p.second;
-  g_onewire_map.clear(); g_dallas_map.clear();
-}
-
-void readConfig() {
-  clearSensors();
-  if (!FS_BEGIN()) return;
-  File f = FS_OPEN("/config.json", "r");
-  if (!f) return;
-  JsonDocument doc;
-  if (deserializeJson(doc, f) != DeserializationError::Ok) { f.close(); return; }
-  f.close();
-  String mode = doc["mode"] | "gateway";
-  g_mode = (mode == "node") ? DeviceMode::NODE : DeviceMode::GATEWAY;
-  g_ssid = doc["SSID"] | "";
-  g_password = doc["PASSWORD"] | "";
-  g_iothubHost = doc["IOTHUB_HOST"] | "";
-  g_deviceId = doc["DEVICE_ID"] | "";
-  g_sasToken = doc["SAS_TOKEN"] | "";
-  g_protocol = doc["PROTOCOL"] | "http";
-  g_firmwareUrl = doc["firmwareUrl"] | "";
-  g_sleepSeconds = doc["sleepSeconds"] | 60;
-  for (JsonObject obj : doc["sensors"].as<JsonArray>()) {
-    Sensor s;
-    s.name = obj["name"] | "";
-    s.type = obj["type"] | "";
-    s.pin = obj["pin"] | 0;
-    if (s.type == "cap_soil_moisture") {
-      s.air_value = obj["air_value"] | 4095;
-      s.water_value = obj["water_value"] | 0;
-    } else if (s.type == "dht22") {
-      s.dht = new DHT(s.pin, DHT22); s.dht->begin();
-    } else if (s.type == "ds18b20") {
-      s.index = obj["index"] | 0;
-      if (g_dallas_map.find(s.pin) == g_dallas_map.end()) {
-        OneWire* ow = new OneWire(s.pin);
-        DallasTemperature* dt = new DallasTemperature(ow);
-        dt->begin();
-        g_onewire_map[s.pin] = ow;
-        g_dallas_map[s.pin] = dt;
-      }
-      s.oneWire = g_onewire_map[s.pin];
-      s.sensors = g_dallas_map[s.pin];
-    } else if (s.type == "bme280") {
-      s.address = obj["address"] | 0x76;
-      s.bme = new Adafruit_BME280();
-      s.bme->begin(s.address);
-    } else if (s.type == "bmp280") {
-      s.address = obj["address"] | 0x76;
-      s.bmp = new Adafruit_BMP280();
-      s.bmp->begin(s.address);
-    }
-    g_sensors.push_back(s);
-  }
-  g_configValid = true;
-}
-
-// --- WIFI ---
-bool connectSTA() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(g_ssid.c_str(), g_password.c_str());
-  uint8_t attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-    delay(500); attempts++;
-  }
-  return WiFi.status() == WL_CONNECTED;
-}
-
-void startAPMode() {
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-  g_apMode = true;
-  g_apStartTime = millis();
-  setupWebServer();
-}
-
-// --- MESH ---
-void setupMesh() {
-  mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
-  mesh.init(MESH_PREFIX + g_deviceId, MESH_PASSWORD, MESH_PORT);
-  mesh.onReceive(&meshReceivedCallback);
-}
-
-// --- IOT HUB ---
-#ifdef ESP32
-void setupIoTHub() {
-  if (g_protocol == "mqtt") {
-    mqttClient.setServer(g_iothubHost.c_str(), 8883);
-  } else if (g_protocol == "sdk") {
-    if (platform_init() != 0) return;
-    String conn = "HostName=" + g_iothubHost + ";DeviceId=" + g_deviceId +
-                  ";SharedAccessSignature=" + g_sasToken;
-    g_iotHubClient = IoTHubClient_LL_CreateFromConnectionString(conn.c_str(), MQTT_Protocol);
-    if (g_iotHubClient) {
-      IoTHubClient_LL_SetRetryPolicy(g_iotHubClient, IOTHUB_CLIENT_RETRY_EXPONENTIAL_BACKOFF_WITH_JITTER, 0);
-    }
-  }
-}
-#endif
-
-// --- WEB SERVER ---
-void setupWebServer() {
-  server.on("/", HTTP_GET, [](WebRequest *r) {
-    r->send(200, "text/html", configHtml);
+  // CAPTURE 'html' in the lambda
+  server.on("/", HTTP_GET, [html](AsyncWebServerRequest *request) {
+    request->send(200, "text/html", html.c_str());
   });
-  server.on("/get_config", HTTP_GET, [](WebRequest *r) {
+
+  server.on("/get_config", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (FS_EXISTS("/config.json")) {
-      r->send(FS_TYPE, "/config.json", "application/json");
+      request->send(FS_TYPE, "/config.json", "application/json");
     } else {
-      r->send(404);
+      request->send(404);
     }
   });
-  server.on("/save_config", HTTP_POST, [](WebRequest *r) {
-    r->send(200);
-  }, NULL, [](WebRequest *r, uint8_t *data, size_t len, size_t index, size_t total) {
+
+  server.on("/save_config", HTTP_POST, [](AsyncWebServerRequest *request) {
+    request->send(200);
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    Serial.println("[CONFIG] save config");
+    
     static String body;
     if (index == 0) body = "";
     body += String((char*)data).substring(0, len);
+    Serial.println(body);
+
     if (index + len == total) {
       File f = FS_OPEN("/config.json", "w");
       if (f) { f.print(body); f.close(); }
-      delay(800); ESP.restart();
+      delay(800);
+    Serial.println("[CONFIG] saveed");
+
+      ESP.restart();
     }
   });
+
   server.begin();
 }
+
 
 // --- AZURE SEND ---
 void forwardToIoTHub(const String &payload) {
@@ -364,47 +424,116 @@ void forwardToIoTHub(const String &payload) {
   }
 }
 
+// void loadConfigFromSerial() {
+//   Serial.println("[CONFIG] Enter JSON config, end with a blank line:");
+//   String jsonStr = "";
+//   unsigned long start = millis();
+//   while (millis() - start < 30000) {  // 30s timeout
+//     while (Serial.available()) {
+//       char c = Serial.read();
+//       if (c == '\n' && jsonStr.endsWith("\n")) break;  // double newline ends input
+//       jsonStr += c;
+//       start = millis(); // reset timeout on input
+//     }
+//   }
+
+//   if (jsonStr.length() > 0) {
+//     Serial.println("[CONFIG] Writing to SPIFFS...");
+//     if (FS_BEGIN()) {
+//       File f = FS_OPEN("/config.json", "w");
+//       if (f) {
+//         f.print(jsonStr);
+//         f.close();
+//         Serial.println("[CONFIG] Saved successfully, restarting...");
+//         delay(500);
+//         ESP.restart();
+//       } else {
+//         Serial.println("[CONFIG] Failed to open config.json for writing");
+//       }
+//     } else {
+//       Serial.println("[CONFIG] Failed to mount filesystem");
+//     }
+//   } else {
+//     Serial.println("[CONFIG] No input received");
+//   }
+// }
+
+
 // --- SETUP ---
+
 void setup() {
   Serial.begin(115200);
+  delay(200);
+  Serial.println("[BOOT] start");
+
   pinMode(PIN_BOOT, INPUT_PULLUP);
   g_bootCount++;
-  if (!g_configValid) {
-    readConfig();
-    if (!g_configValid) { startAPMode(); return; }
+
+  // MOUNT LITTLEFS ONCE HERE
+  Serial.println("[BOOT] Mounting LittleFS at /littlefs");
+  if (!FS_BEGIN()) {
+    Serial.println("[BOOT] Format needed");
+    LittleFS.format();
+    if (!FS_BEGIN()) {
+      Serial.println("[BOOT] LittleFS FAILED");
+      while (1) delay(1000);
+    }
+    Serial.println("[BOOT] LittleFS formatted & mounted");
+  } else {
+    Serial.println("[BOOT] LittleFS mounted");
   }
+
+  readConfig();
+  Serial.printf("[BOOT] configValid = %d\n", g_configValid);
+
+  if (!g_configValid) {
+    startAPMode();
+    return;
+  }
+
   if (g_mode == DeviceMode::GATEWAY) {
-    if (!connectSTA()) { startAPMode(); return; }
+    if (!connectSTA()) {
+      startAPMode();
+      return;
+    }
     setupMesh();
 #ifdef ESP32
     setupIoTHub();
+    checkOTA();
 #endif
     setupWebServer();
   } else {
     WiFi.mode(WIFI_STA);
     setupMesh();
   }
+
+  Serial.println("[BOOT] setup complete");
 }
 
 // --- LOOP ---
 void loop() {
+ dnsServer.processNextRequest();  // Add this
   if (digitalRead(PIN_BOOT) == LOW && g_buttonPressTime == 0) g_buttonPressTime = millis();
   if (digitalRead(PIN_BOOT) == LOW && millis() - g_buttonPressTime > 3000) {
     FS_REMOVE("/config.json"); delay(500); ESP.restart();
   }
   if (digitalRead(PIN_BOOT) == HIGH) g_buttonPressTime = 0;
   if (g_apMode && millis() - g_apStartTime > CONFIG_TIMEOUT_MS) ESP.restart();
+  //mesh.update();
+if (g_meshInitialized) {
   mesh.update();
-  if (g_mode == DeviceMode::NODE && g_bootCount == 1) {
+}
+   /*if (g_mode == DeviceMode::NODE && g_bootCount == 1) {
     static bool sent = false;
     if (!sent && (mesh.getNodeList().size() > 0 || millis() > 10000)) {
       JsonDocument doc;
       doc["deviceId"] = g_deviceId;
       doc["firmwareVersion"] = FIRMWARE_VERSION;
-      doc["battery"] = analogRead(BATTERY_PIN) * 3.3 / 1023.0;
+      doc["battery"] = analogRead(BATTERY_PIN) * 3.3 / 4095.0;
       doc["rssi"] = WiFi.RSSI();
       doc["meshHopCount"] = 0;
       doc["sleepSeconds"] = g_sleepSeconds;
+
       for (auto &s : g_sensors) {
         if (s.type == "cap_soil_moisture") {
           int raw = analogRead(s.pin);
@@ -425,6 +554,7 @@ void loop() {
           doc[s.name + "_pres"] = s.bmp->readPressure();
         }
       }
+
       String payload; serializeJson(doc, payload);
       forwardToIoTHub(payload);
       sent = true;
@@ -432,7 +562,8 @@ void loop() {
       ESP.deepSleep(g_sleepSeconds * 1000000ULL);
     }
   }
-#ifdef ESP32
+
+  #ifdef ESP32
   if (g_iotHubClient) IoTHubClient_LL_DoWork(g_iotHubClient);
-#endif
+  #endif*/
 }
