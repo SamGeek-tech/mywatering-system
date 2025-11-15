@@ -23,10 +23,10 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <LittleFS.h>
-#define FS_TYPE LittleFS
-#define FS_OPEN(path, mode) LittleFS.open(path, mode)
-#define FS_EXISTS(path) LittleFS.exists(path)
-#define FS_REMOVE(path) LittleFS.remove(path)
+// #define FS_TYPE LittleFS
+// #define FS_OPEN(path, mode) LittleFS.open("/littlefs", mode)
+// #define FS_EXISTS(path) LittleFS.exists("/littlefs")
+// #define FS_REMOVE(path) LittleFS.remove("/littlefs")
 
 #if defined(ESP32)
 #include <WiFi.h>
@@ -37,7 +37,7 @@
 #include <HTTPUpdate.h>
 #include "AzureIotHub.h"
 #include "Esp32MQTTClient.h"
-#define FS_BEGIN() LittleFS.begin(true, "/littlefs") // MOUNT AT ROOT
+// #define FS_BEGIN() LittleFS.begin(true, "/littlefs") // MOUNT AT ROOT
 #define RTC_ATTR RTC_DATA_ATTR
 #define HTTP_CLIENT HTTPClient
 #define WebRequest AsyncWebServerRequest
@@ -50,7 +50,7 @@
 #include <ESP8266httpUpdate.h>
 #include <ESP8266HTTPClient.h>
 #include <user_interface.h>
-#define FS_BEGIN() LittleFS.begin()
+// #define FS_BEGIN() LittleFS.begin()
 #define RTC_ATTR
 #define HTTP_CLIENT HTTPClient
 #define WebRequest AsyncWebServerRequest
@@ -180,12 +180,19 @@ void clearSensors()
 
 void readConfig()
 {
-  clearSensors();
-  if (!FS_BEGIN())
-    return;
-  File f = FS_OPEN("/config.json", "r");
+  // clearSensors();
+  //  if (!FS_BEGIN())
+  //    return;
+  //  File f = LittleFS.open("/littlefs/config.json", "r");
+
+  // if (!f)
+  // return;
+  File f = LittleFS.open("/littlefs/config.json", "r");
   if (!f)
+  {
+    Serial.println("[CONFIG] No config.json found");
     return;
+  }
 
   JsonDocument doc;
   if (deserializeJson(doc, f) != DeserializationError::Ok)
@@ -194,6 +201,10 @@ void readConfig()
     return;
   }
   f.close();
+
+  String payload;
+  serializeJson(doc, payload);
+  Serial.println("[BOOT] readConfig: " + payload);
 
   String mode = doc["mode"] | "gateway";
   g_mode = (mode == "node") ? DeviceMode::NODE : DeviceMode::GATEWAY;
@@ -261,10 +272,18 @@ bool connectSTA()
   uint8_t attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 40)
   {
+    Serial.print(".");
     delay(500);
     attempts++;
   }
-  return WiFi.status() == WL_CONNECTED;
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.println("[STA] Failed to connect!");
+    return false;
+  }
+
+  Serial.printf("[STA] Connected — IP: %s\n", WiFi.localIP().toString().c_str());
+  return true;
 }
 
 void startAPMode()
@@ -350,110 +369,110 @@ void checkOTA()
 // --- WEB SERVER ---
 void setupWebServer()
 {
-  String html = R"raw(
-<!DOCTYPE html><html><head><title>ESP Config</title></head><body>
-<h2>Mode</h2><select id="mode"><option value="gateway">Gateway</option><option value="node">Node</option></select><br>
-<h2>Wi-Fi</h2>SSID:<input id="SSID"><br>Password:<input type="password" id="PASSWORD"><br>
-<h2>Azure</h2>Host:<input id="IOTHUB_HOST"><br>Device ID:<input id="DEVICE_ID"><br>
-SAS Token:<input type="password" id="SAS_TOKEN"><br>
-Protocol:<select id="PROTOCOL"><option value="http">HTTP</option><option value="mqtt">MQTT</option>
-)raw";
-
-#ifdef ESP32
-  html += "<option value=\"sdk\">SDK</option>";
-#endif
-
-  html += R"raw(
-</select><br>
-OTA URL:<input id="firmwareUrl"><br>Sleep (s):<input type="number" id="sleepSeconds" value="60" min="10"><br>
-<h2>Sensors</h2><div id="sensors"></div><button onclick="add()">+ Sensor</button><br><br>
-<button onclick="save()">Save & Restart</button>
-<script>
-let cnt=0;
-function add(){cnt++;let d=document.createElement('div');d.innerHTML=
-`<hr>Name:<input name="name${cnt}"><br>Type:<select name="type${cnt}" onchange="extra(${cnt},this.value)">
-<option value="cap_soil_moisture">Soil</option><option value="dht22">DHT22</option>
-<option value="ds18b20">DS18B20</option><option value="bme280">BME280</option>
-<option value="bmp280">BMP280</option></select><br>Pin:<input type="number" name="pin${cnt}"><br>
-<div id="extra${cnt}"></div>`;document.getElementById('sensors').appendChild(d);}
-function extra(i,t){let e=document.getElementById('extra'+i);e.innerHTML='';
-if(t==='cap_soil_moisture')e.innerHTML='Air:<input name="air'+i+'" value="4095"> Water:<input name="water'+i+'" value="0">';
-if(t==='ds18b20')e.innerHTML='Index:<input name="index'+i+'" value="0">';
-if(t==='bme280'||t==='bmp280')e.innerHTML='Addr:<select name="addr'+i+'"><option value="118">0x76</option><option value="119">0x77</option></select>';}
-function save(){
-  let o={mode:document.getElementById('mode').value, SSID:document.getElementById('SSID').value,
-         PASSWORD:document.getElementById('PASSWORD').value, IOTHUB_HOST:document.getElementById('IOTHUB_HOST').value,
-         DEVICE_ID:document.getElementById('DEVICE_ID').value, SAS_TOKEN:document.getElementById('SAS_TOKEN').value,
-         PROTOCOL:document.getElementById('PROTOCOL').value, firmwareUrl:document.getElementById('firmwareUrl').value,
-         sleepSeconds:parseInt(document.getElementById('sleepSeconds').value), sensors:[]};
-  for(let i=1;i<=cnt;i++){
-    let s={name:document.querySelector(`[name=name${i}]`).value, type:document.querySelector(`[name=type${i}]`).value,
-           pin:parseInt(document.querySelector(`[name=pin${i}]`).value)};
-    if(s.type==='cap_soil_moisture'){s.air_value=parseInt(document.querySelector(`[name=air${i}]`).value);
-      s.water_value=parseInt(document.querySelector(`[name=water${i}]`).value);}
-    if(s.type==='ds18b20')s.index=parseInt(document.querySelector(`[name=index${i}]`).value||0);
-    if(s.type==='bme280'||s.type==='bmp280')s.address=parseInt(document.querySelector(`[name=addr${i}]`).value);
-    o.sensors.push(s);}
-  fetch('/save_config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)})
-   .then(()=>{alert('Saved – restarting');});
-}
-</script></body></html>
-)raw";
-
-  // CAPTURE 'html' in the lambda
-  server.on("/", HTTP_GET, [html](AsyncWebServerRequest *request) { 
-      request->send(200, "text/html", html.c_str()); 
-  });
-
-  server.on("/get_config", HTTP_GET, [](AsyncWebServerRequest *request) {
-    if (FS_EXISTS("/config.json")) {
-      request->send(FS_TYPE, "/config.json", "application/json");
+  // 1. Serve static files (HTML, CSS, …)
+  server.serveStatic("/", LittleFS, "/littlefs/").setDefaultFile("index.html");
+  // server.serveStatic("/style.css", LittleFS, "/littlefs/style.css");  // Explicit for CSS
+  //  2. GET current config (for auto-fill on page load)
+  server.on("/get_config", HTTP_GET, [](AsyncWebServerRequest *request)
+            {
+    if (LittleFS.exists("/littlefs/config.json")) {
+      request->send(LittleFS, "/littlefs/config.json", "application/json");
     } else {
-      request->send(404);
-    } 
-  });
+      request->send(404, "text/plain", "No config yet");
+    } });
 
-  server.on("/save_config", HTTP_POST, [](AsyncWebServerRequest *request) { 
-      request->send(200); 
-  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-    Serial.println("[CONFIG] save config");
-    
+  // 3. POST new config → write to LittleFS and restart
+  server.on("/save_config", HTTP_POST, [](AsyncWebServerRequest *request)
+            {
+              // This runs when headers are received
+              request->send(200); // ACK immediately
+            },
+            nullptr, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+            {
     static String body;
     if (index == 0) body = "";
     body += String((char*)data).substring(0, len);
-    Serial.println(body);
 
     if (index + len == total) {
-      File f = FS_OPEN("/config.json", "w");
-      if (f) { f.print(body); f.close(); }
-      delay(800);
-    Serial.println("[CONFIG] saveed");
+      Serial.println("[WEB] Saving config:");
+      Serial.println(body);
 
-      ESP.restart();
-    } 
-  });
+      File f = LittleFS.open("/littlefs/config.json", "w");
+      if (f) {
+        f.print(body);
+        f.close();
+        Serial.println("[WEB] Config saved – restarting...");
+        request->send(200, "application/json", "{\"status\":\"ok\"}");
+        delay(1000);
+        ESP.restart();
+      } else {
+        Serial.println("[WEB] Failed to write config.json");
+        request->send(500, "text/plain", "Failed to save config");
+      }
+    } });
 
+  // --- LIVE DATA ENDPOINT ---
+  server.on("/live_data", HTTP_GET, [](AsyncWebServerRequest *request)
+            {
+  JsonDocument doc;
+  JsonObject root = doc.to<JsonObject>();
+
+  for (const auto &s : g_sensors) {
+    JsonObject sensor = root.createNestedObject(s.name);
+
+    if (s.type == "cap_soil_moisture") {
+      int raw = analogRead(s.pin);
+      float pct = 100.0 * (s.air_value - raw) / (float)(s.air_value - s.water_value);
+      sensor["moisture"] = constrain(pct, 0, 100);
+    }
+    else if (s.type == "dht22") {
+      sensor["temp"] = s.dht->readTemperature();
+      sensor["hum"] = s.dht->readHumidity();
+    }
+    else if (s.type == "ds18b20") {
+      sensor["temp"] = s.sensors->getTempCByIndex(s.index);
+    }
+    else if (s.type == "bme280") {
+      sensor["temp"] = s.bme->readTemperature();
+      sensor["hum"] = s.bme->readHumidity();
+      sensor["pres"] = s.bme->readPressure() / 100.0F;
+    }
+    else if (s.type == "bmp280") {
+      sensor["temp"] = s.bmp->readTemperature();
+      sensor["pres"] = s.bmp->readPressure() / 100.0F;
+    }
+  }
+
+  String response;
+  serializeJson(doc, response);
+  request->send(200, "application/json", response); });
   server.begin();
+  Serial.println("[WEB] HTTP server started");
 }
 
 // --- AZURE SEND ---
-void forwardToIoTHub(const String &payload) {
-  if (g_mode == DeviceMode::NODE) {
+void forwardToIoTHub(const String &payload)
+{
+  if (g_mode == DeviceMode::NODE)
+  {
     mesh.sendBroadcast(payload);
     return;
   }
-  if (g_protocol == "http") {
+  if (g_protocol == "http")
+  {
     HTTP_CLIENT http;
     String url = "https://" + g_iothubHost + "/devices/" + g_deviceId +
                  "/messages/events?api-version=2018-06-30";
-    http.begin(espClient,url);
+    http.begin(espClient, url);
     http.addHeader("Authorization", g_sasToken);
     http.addHeader("Content-Type", "application/json");
     http.POST(payload);
     http.end();
   }
-  else if (g_protocol == "mqtt") {
-    if (!mqttClient.connected() && millis() - lastReconnectAttempt > 5000)    {
+  else if (g_protocol == "mqtt")
+  {
+    if (!mqttClient.connected() && millis() - lastReconnectAttempt > 5000)
+    {
       lastReconnectAttempt = millis();
       String user = g_iothubHost + "/" + g_deviceId + "/?api-version=2018-06-30";
 #ifdef ESP32
@@ -461,12 +480,14 @@ void forwardToIoTHub(const String &payload) {
 #endif
       mqttClient.connect(g_deviceId.c_str(), user.c_str(), g_sasToken.c_str());
     }
-    if (mqttClient.connected()) {
+    if (mqttClient.connected())
+    {
       String topic = "devices/" + g_deviceId + "/messages/events/";
       mqttClient.publish(topic.c_str(), payload.c_str());
     }
 #ifdef ESP32
-  } else if (g_protocol == "sdk" && g_iotHubClient)
+  }
+  else if (g_protocol == "sdk" && g_iotHubClient)
   {
     IOTHUB_MESSAGE_HANDLE msg = IoTHubMessage_CreateFromString(payload.c_str());
     if (msg)
@@ -511,7 +532,8 @@ void forwardToIoTHub(const String &payload) {
 
 // --- SETUP ---
 
-void setup() {
+void setup()
+{
   Serial.begin(115200);
   delay(200);
   Serial.println("[BOOT] start");
@@ -520,30 +542,42 @@ void setup() {
   g_bootCount++;
 
   // MOUNT LITTLEFS ONCE HERE
-  Serial.println("[BOOT] Mounting LittleFS at /littlefs");
-  if (!FS_BEGIN()) {
+Serial.println("[BOOT] Mounting LittleFS at /littlefs");
+
+if (!LittleFS.begin(true, "/littlefs")) {
     Serial.println("[BOOT] Format needed");
     LittleFS.format();
-    if (!FS_BEGIN()) {
-      Serial.println("[BOOT] LittleFS FAILED");
-      while (1)
-        delay(1000);
+    if (!LittleFS.begin(true, "/littlefs")) {
+        Serial.println("[BOOT] LittleFS FAILED");
+        while (1) delay(1000);
     }
     Serial.println("[BOOT] LittleFS formatted & mounted");
-  } else {
+} else {
     Serial.println("[BOOT] LittleFS mounted");
-  }
+}
+
+Serial.println("[DEBUG] LittleFS contents:");
+File root = LittleFS.open("/littlefs/");
+File file = root.openNextFile();
+while (file) {
+  Serial.printf("  %s (%u bytes)\n", file.name(), file.size());
+  file = root.openNextFile();
+}
+
 
   readConfig();
   Serial.printf("[BOOT] configValid = %d\n", g_configValid);
 
-  if (!g_configValid) {
+  if (!g_configValid)
+  {
     startAPMode();
     return;
   }
 
-  if (g_mode == DeviceMode::GATEWAY) {
-    if (!connectSTA()) {
+  if (g_mode == DeviceMode::GATEWAY)
+  {
+    if (!connectSTA())
+    {
       startAPMode();
       return;
     }
@@ -553,7 +587,9 @@ void setup() {
     checkOTA();
 #endif
     setupWebServer();
-  } else {
+  }
+  else
+  {
     WiFi.mode(WIFI_STA);
     setupMesh();
   }
@@ -562,13 +598,16 @@ void setup() {
 }
 
 // --- LOOP ---
-void loop() {
-  dnsServer.processNextRequest();
-  if (digitalRead(PIN_BOOT) == LOW && g_buttonPressTime == 0)
+void loop()
+{
+  if (g_apMode) {
+        dnsServer.processNextRequest();
+    }
+      if (digitalRead(PIN_BOOT) == LOW && g_buttonPressTime == 0)
     g_buttonPressTime = millis();
   if (digitalRead(PIN_BOOT) == LOW && millis() - g_buttonPressTime > 3000)
   {
-    FS_REMOVE("/config.json");
+    LittleFS.remove("/littlefs/config.json");
     delay(500);
     ESP.restart();
   }
@@ -583,7 +622,17 @@ void loop() {
   }
   // === GATEWAY: READ OWN SENSORS EVERY 60 SECONDS ===
   static unsigned long lastSensorRead = 0;
-  if (g_mode == DeviceMode::GATEWAY && g_configValid && millis() - lastSensorRead > 60000)
+  // Serial.printf("[GATEWAY] g_mode: %s, g_configValid: %d, time_since_last: %lu, send_now: %d\n",
+  //               (g_mode == DeviceMode::GATEWAY ? "GATEWAY" : "NODE"),
+  //               g_configValid,
+  //               (millis() - lastSensorRead),
+  //               (g_mode == DeviceMode::GATEWAY && g_configValid && millis() - lastSensorRead > 10000));
+  //               static uint32_t lastHeap = 0;
+  // if (millis() - lastHeap > 10000) {
+  //   lastHeap = millis();
+  //   Serial.printf("[MEM] Free heap: %d\n", ESP.getFreeHeap());
+  // }
+  if (g_mode == DeviceMode::GATEWAY && g_configValid && millis() - lastSensorRead > 10000)
   {
     lastSensorRead = millis();
 
@@ -608,16 +657,24 @@ void loop() {
         int raw = analogRead(s.pin);
         float pct = 100.0 * (s.air_value - raw) / (float)(s.air_value - s.water_value);
         doc[s.name] = constrain(pct, 0, 100);
-      } else if (s.type == "dht22") {
+      }
+      else if (s.type == "dht22")
+      {
         doc[s.name + "_temp"] = s.dht->readTemperature();
         doc[s.name + "_hum"] = s.dht->readHumidity();
-      } else if (s.type == "ds18b20") {
+      }
+      else if (s.type == "ds18b20")
+      {
         doc[s.name] = s.sensors->getTempCByIndex(s.index);
-      } else if (s.type == "bme280") {
+      }
+      else if (s.type == "bme280")
+      {
         doc[s.name + "_temp"] = s.bme->readTemperature();
         doc[s.name + "_hum"] = s.bme->readHumidity();
         doc[s.name + "_pres"] = s.bme->readPressure() / 100.0F;
-      } else if (s.type == "bmp280") {
+      }
+      else if (s.type == "bmp280")
+      {
         doc[s.name + "_temp"] = s.bmp->readTemperature();
         doc[s.name + "_pres"] = s.bmp->readPressure() / 100.0F;
       }
@@ -642,22 +699,32 @@ void loop() {
       doc["meshHopCount"] = 0;
       doc["sleepSeconds"] = g_sleepSeconds;
 
-      for (auto &s : g_sensors) {
-        if (s.type == "cap_soil_moisture") {
+      for (auto &s : g_sensors)
+      {
+        if (s.type == "cap_soil_moisture")
+        {
           int raw = analogRead(s.pin);
           float pct = (float)(s.air_value - raw) / (s.air_value - s.water_value) * 100.0;
           doc[s.name] = constrain(pct, 0, 100);
-        } else if (s.type == "dht22") {
+        }
+        else if (s.type == "dht22")
+        {
           doc[s.name + "_temp"] = s.dht->readTemperature();
           doc[s.name + "_hum"] = s.dht->readHumidity();
-        } else if (s.type == "ds18b20") {
+        }
+        else if (s.type == "ds18b20")
+        {
           s.sensors->requestTemperatures();
           doc[s.name] = s.sensors->getTempCByIndex(s.index);
-        } else if (s.type == "bme280") {
+        }
+        else if (s.type == "bme280")
+        {
           doc[s.name + "_temp"] = s.bme->readTemperature();
           doc[s.name + "_hum"] = s.bme->readHumidity();
           doc[s.name + "_pres"] = s.bme->readPressure();
-        } else if (s.type == "bmp280") {
+        }
+        else if (s.type == "bmp280")
+        {
           doc[s.name + "_temp"] = s.bmp->readTemperature();
           doc[s.name + "_pres"] = s.bmp->readPressure();
         }

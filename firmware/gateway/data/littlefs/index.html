@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ESP32 Config + Live Charts</title>
+  <link rel="stylesheet" href="/style.css" />
+  <!-- Chart.js + Luxon (for time axis) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/luxon@3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-luxon"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>ESP32 Mesh-Azure Config</h1>
+
+    <!-- Device Mode -->
+    <section>
+      <h2>Device Mode</h2>
+      <select id="mode">
+        <option value="gateway">Gateway</option>
+        <option value="node">Node</option>
+      </select>
+    </section>
+
+    <!-- Wi-Fi -->
+    <section>
+      <h2>Wi-Fi</h2>
+      <label>SSID <input id="SSID" required /></label><br/>
+      <label>Password <input type="password" id="PASSWORD" required /></label>
+    </section>
+
+    <!-- Azure IoT Hub -->
+    <section>
+      <h2>Azure IoT Hub</h2>
+      <label>Host <input id="IOTHUB_HOST" placeholder="your-iothub.azure-devices.net" /></label><br/>
+      <label>Device ID <input id="DEVICE_ID" required /></label><br/>
+      <label>SAS Token <input type="password" id="SAS_TOKEN" /></label><br/>
+      <label>Protocol
+        <select id="PROTOCOL">
+          <option value="http">HTTP</option>
+          <option value="mqtt">MQTT</option>
+          <option value="sdk">SDK (ESP32 only)</option>
+        </select>
+      </label><br/>
+      <label>OTA Firmware URL <input id="firmwareUrl" placeholder="http://.../firmware.bin" /></label><br/>
+      <label>Sleep Interval (seconds) <input type="number" id="sleepSeconds" value="60" min="10" /></label>
+    </section>
+
+    <!-- Sensors -->
+    <section>
+      <h2>Sensors</h2>
+      <div id="sensors"></div>
+      <button type="button" id="addSensor">+ Add Sensor</button>
+    </section>
+
+    <!-- Actions -->
+    <section class="actions">
+      <button type="button" id="saveBtn">Save & Restart</button>
+    </section>
+
+    <!-- Live Charts -->
+    <section id="charts">
+      <h2>Live Sensor Data</h2>
+      <div id="chartContainer"></div>
+    </section>
+  </div>
+
+  <script>
+    let cnt = 0;
+    const charts = new Map(); // sensorName → Chart instance
+
+    // --- Add Sensor ---
+    function addSensor() {
+      cnt++;
+      const div = document.createElement('div');
+      div.className = 'sensor';
+      div.dataset.index = cnt;
+      div.innerHTML = `
+        <hr>
+        <div class="sensor-header">
+          <strong>Sensor #${cnt}</strong>
+          <button type="button" class="delete-btn" onclick="deleteSensor(this)">Delete</button>
+        </div>
+        <label>Name <input name="name${cnt}" required></label><br>
+        <label>Type
+          <select name="type${cnt}" onchange="extra(${cnt}, this.value)">
+            <option value="cap_soil_moisture">Soil Moisture (%)</option>
+            <option value="dht22">DHT22 (Temp + Hum)</option>
+            <option value="ds18b20">DS18B20 (Temp)</option>
+            <option value="bme280">BME280 (Temp + Hum + Pres)</option>
+            <option value="bmp280">BMP280 (Temp + Pres)</option>
+          </select>
+        </label><br>
+        <label>Pin <input type="number" name="pin${cnt}" min="0" required></label><br>
+        <div id="extra${cnt}"></div>
+      `;
+      document.getElementById('sensors').appendChild(div);
+    }
+
+    function deleteSensor(btn) {
+      if (!confirm('Delete this sensor?')) return;
+      const sensorDiv = btn.closest('.sensor');
+      const name = sensorDiv.querySelector(`[name^=name]`).value.trim();
+      if (name && charts.has(name)) {
+        charts.get(name).destroy();
+        charts.delete(name);
+      }
+      sensorDiv.remove();
+    }
+
+    function extra(i, t) {
+      const e = document.getElementById('extra' + i);
+      e.innerHTML = '';
+      if (t === 'cap_soil_moisture') {
+        e.innerHTML = `
+          Air value <input type="number" name="air${i}" value="4095" min="0" max="4095"><br>
+          Water value <input type="number" name="water${i}" value="0" min="0" max="4095">
+        `;
+      }
+      if (t === 'ds18b20') {
+        e.innerHTML = `Index <input type="number" name="index${i}" value="0" min="0">`;
+      }
+      if (t === 'bme280' || t === 'bmp280') {
+        e.innerHTML = `
+          I²C Address
+          <select name="addr${i}">
+            <option value="118">0x76</option>
+            <option value="119">0x77</option>
+          </select>
+        `;
+      }
+    }
+
+    function buildConfig() {
+      const cfg = {
+        mode: document.getElementById('mode').value,
+        SSID: document.getElementById('SSID').value,
+        PASSWORD: document.getElementById('PASSWORD').value,
+        IOTHUB_HOST: document.getElementById('IOTHUB_HOST').value,
+        DEVICE_ID: document.getElementById('DEVICE_ID').value,
+        SAS_TOKEN: document.getElementById('SAS_TOKEN').value,
+        PROTOCOL: document.getElementById('PROTOCOL').value,
+        firmwareUrl: document.getElementById('firmwareUrl').value,
+        sleepSeconds: parseInt(document.getElementById('sleepSeconds').value) || 60,
+        sensors: []
+      };
+
+      document.querySelectorAll('.sensor').forEach(div => {
+        const i = div.dataset.index;
+        const nameEl = div.querySelector(`[name=name${i}]`);
+        const typeEl = div.querySelector(`[name=type${i}]`);
+        const pinEl = div.querySelector(`[name=pin${i}]`);
+        if (!nameEl || !typeEl || !pinEl) return;
+
+        const s = {
+          name: nameEl.value.trim(),
+          type: typeEl.value,
+          pin: parseInt(pinEl.value) || 0
+        };
+
+        if (s.type === 'cap_soil_moisture') {
+          const airEl = div.querySelector(`[name=air${i}]`);
+          const waterEl = div.querySelector(`[name=water${i}]`);
+          s.air_value = airEl ? parseInt(airEl.value) : 4095;
+          s.water_value = waterEl ? parseInt(waterEl.value) : 0;
+        }
+        if (s.type === 'ds18b20') {
+          const idxEl = div.querySelector(`[name=index${i}]`);
+          s.index = idxEl ? parseInt(idxEl.value) : 0;
+        }
+        if (s.type === 'bme280' || s.type === 'bmp280') {
+          const addrEl = div.querySelector(`[name=addr${i}]`);
+          s.address = addrEl ? parseInt(addrEl.value) : 118;
+        }
+
+        if (s.name) cfg.sensors.push(s);
+      });
+      return cfg;
+    }
+
+    // --- Save Config ---
+    document.getElementById('saveBtn').onclick = () => {
+      const cfg = buildConfig();
+      if (!cfg.SSID || !cfg.PASSWORD || !cfg.DEVICE_ID) {
+        alert('Please fill Wi-Fi SSID, Password, and Device ID');
+        return;
+      }
+      const btn = document.getElementById('saveBtn');
+      const old = btn.textContent;
+      btn.textContent = 'Saving...';
+      btn.disabled = true;
+
+      fetch('/save_config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cfg)
+      })
+      .then(r => {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        alert('Saved! Restarting...');
+      })
+      .catch(err => alert('Save failed: ' + err.message))
+      .finally(() => {
+        btn.textContent = old;
+        btn.disabled = false;
+      });
+    };
+
+    // --- Load Config & Create Charts ---
+    fetch('/get_config')
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(cfg => {
+        document.getElementById('mode').value = cfg.mode || 'gateway';
+        document.getElementById('SSID').value = cfg.SSID || '';
+        document.getElementById('PASSWORD').value = cfg.PASSWORD || '';
+        document.getElementById('IOTHUB_HOST').value = cfg.IOTHUB_HOST || '';
+        document.getElementById('DEVICE_ID').value = cfg.DEVICE_ID || '';
+        document.getElementById('SAS_TOKEN').value = cfg.SAS_TOKEN || '';
+        document.getElementById('PROTOCOL').value = cfg.PROTOCOL || 'http';
+        document.getElementById('firmwareUrl').value = cfg.firmwareUrl || '';
+        document.getElementById('sleepSeconds').value = cfg.sleepSeconds || 60;
+
+        (cfg.sensors || []).forEach(s => {
+          addSensor();
+          const i = cnt;
+          const div = document.querySelector(`.sensor[data-index="${i}"]`);
+          div.querySelector(`[name=name${i}]`).value = s.name || '';
+          div.querySelector(`[name=type${i}]`).value = s.type || '';
+          div.querySelector(`[name=pin${i}]`).value = s.pin || 0;
+
+          extra(i, s.type);
+          if (s.type === 'cap_soil_moisture') {
+            const airEl = div.querySelector(`[name=air${i}]`);
+            const waterEl = div.querySelector(`[name=water${i}]`);
+            if (airEl) airEl.value = s.air_value ?? 4095;
+            if (waterEl) waterEl.value = s.water_value ?? 0;
+          }
+          if (s.type === 'ds18b20') {
+            const idxEl = div.querySelector(`[name=index${i}]`);
+            if (idxEl) idxEl.value = s.index ?? 0;
+          }
+          if (s.type === 'bme280' || s.type === 'bmp280') {
+            const addrEl = div.querySelector(`[name=addr${i}]`);
+            if (addrEl) addrEl.value = s.address ?? 118;
+          }
+
+          createChart(s.name, s.type);
+        });
+      })
+      .catch(() => console.log('No config yet'));
+
+    // --- Create Chart ---
+   /* function createChart(name, type) {
+      const container = document.getElementById('chartContainer');
+      const wrapper = document.createElement('div');
+      wrapper.className = 'chart-wrapper';
+      wrapper.innerHTML = `<h3>${name}</h3><canvas></canvas>`;
+      container.appendChild(wrapper);
+
+      const ctx = wrapper.querySelector('canvas').getContext('2d');
+
+      const datasets = [];
+      if (type.includes('temp') || type === 'ds18b20') {
+        datasets.push({ label: 'Temperature (°C)', borderColor: '#e74c3c', data: [] });
+      }
+      if (type.includes('hum')) {
+        datasets.push({ label: 'Humidity (%)', borderColor: '#3498db', data: [] });
+      }
+      if (type.includes('pres')) {
+        datasets.push({ label: 'Pressure (hPa)', borderColor: '#2ecc71', data: [] });
+      }
+      if (type === 'cap_soil_moisture') {
+        datasets.push({ label: 'Soil Moisture (%)', borderColor: '#8e44ad', data: [] });
+      }
+
+      const chart = new Chart(ctx, {
+        type: 'line',
+        data: { datasets },
+        options: {
+          animation: false,
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'time',
+              time: { unit: 'second', displayFormats: { second: 'HH:mm:ss' } },
+              title: { display: true, text: 'Time' }
+            },
+            y: { beginAtZero: false }
+          },
+          plugins: {
+            legend: { position: 'top' },
+            title: { display: false }
+          }
+        }
+      });
+
+      charts.set(name, chart);
+    }
+
+    // --- Live Data Update ---
+    setInterval(() => {
+      fetch('/live_data')
+        .then(r => r.json())
+        .then(data => {
+          const now = Date.now();
+          Object.entries(data).forEach(([name, values]) => {
+            const chart = charts.get(name);
+            if (!chart) return;
+
+            const keys = Object.keys(values);
+            chart.data.datasets.forEach((ds, i) => {
+              const key = keys[i];
+              if (key && values[key] !== null && values[key] !== undefined) {
+                ds.data.push({ x: now, y: values[key] });
+                if (ds.data.length > 60) ds.data.shift();
+              }
+            });
+            chart.update('quiet');
+          });
+        })
+        .catch(() => {});
+    }, 5000);
+*/
+    // --- Init ---
+    document.getElementById('addSensor').onclick = addSensor;
+  </script>
+</body>
+</html>
