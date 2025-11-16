@@ -1,15 +1,15 @@
 {
   "mode":"gateway",
-  "SSID":"",
-  "PASSWORD":"",
-  "IOTHUB_HOST":"myiothub.azure-devices.net",
-  "DEVICE_ID":"ESP32_01",
-  "SAS_TOKEN":"SharedAccessSignature...",
+  "SSID":"testwifi",
+  "PASSWORD":"test123$",
+  "IOTHUB_HOST":"WateringSystem.azure-devices.net",
+  "DEVICE_ID":"MyWaterGate",
+  "SAS_TOKEN":"sueFK1KOdXA327e91Obwhymt738Ds29L61xvW+NpN8Y=",
   "PROTOCOL":"http",
   "firmwareUrl":"",
   "sleepSeconds":60,
   "sensors":[
-    {"name":"Soil1","type":"cap_soil_moisture","pin":34,"air_value":4095,"water_value":0},
+    {"name":"Soil1","type":"cap_soil_moisture","pin":34,"air_value":2514,"water_value":950},
     {"name":"DHT1","type":"dht22","pin":35}
   ]
 }

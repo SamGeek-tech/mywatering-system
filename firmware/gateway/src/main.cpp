@@ -316,10 +316,18 @@ void startAPMode()
 // In setupMesh()
 void setupMesh()
 {
+  // Only initialize mesh on NODE devices to avoid STA <-> mesh conflicts on Gateway.
+  if (g_mode != DeviceMode::NODE) {
+    g_meshInitialized = false;
+    Serial.println("[MESH] Mesh disabled on Gateway for stability");
+    return;
+  }
+
   mesh.setDebugMsgTypes(ERROR | STARTUP | CONNECTION);
-  mesh.init(MESH_PREFIX + g_deviceId, MESH_PASSWORD, MESH_PORT);
+  mesh.init(String(MESH_PREFIX) + g_deviceId, MESH_PASSWORD, MESH_PORT);
   mesh.onReceive(&meshReceivedCallback);
   g_meshInitialized = true; // Mark as ready
+  Serial.println("[MESH] Mesh initialized (NODE mode)");
 }
 
 // --- IOT HUB ---
@@ -581,7 +589,9 @@ while (file) {
       startAPMode();
       return;
     }
-    setupMesh();
+    //setupMesh();
+        // Gateway: do NOT initialize mesh to avoid STA/mesh conflicts (painlessMesh scan issues)
+    g_meshInitialized = false;
 #ifdef ESP32
     setupIoTHub();
     checkOTA();
@@ -590,8 +600,14 @@ while (file) {
   }
   else
   {
+    // NODE mode: connect STA (for optional internet) then start mesh
     WiFi.mode(WIFI_STA);
+    if (!connectSTA()) {
+      // If STA fails still initialize mesh in node mode (mesh uses Wi-Fi AP/station internally)
+      Serial.println("[SETUP] STA failed, proceeding to initialize mesh (NODE mode)");
+    }
     setupMesh();
+    setupWebServer();
   }
 
   Serial.println("[BOOT] setup complete");
