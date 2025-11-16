@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using Azure.Cosmos;
+using Microsoft.Azure.Cosmos;
 using Backend.Lib.Model;
 using System.Text.Json;
 
@@ -106,7 +106,7 @@ namespace Backend.Lib.Storage
                 var tp = JsonSerializerDeserialize(latest);
                 return tp;
             }
-            catch (CosmosException ex) when (ex.Status == 404)
+            catch (CosmosException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
                 return null;
             }
@@ -179,7 +179,7 @@ namespace Backend.Lib.Storage
                 var json = JsonSerializer.Serialize(status);
                 return JsonSerializer.Deserialize<OtaStatus>(json);
             }
-            catch (CosmosException ex) when (ex.Status == 404)
+            catch (CosmosException ex) when (ex.StatusCode ==  System.Net.HttpStatusCode.NotFound)
             {
                 return null;
             }
