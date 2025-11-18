@@ -1,6 +1,7 @@
 using Backend.Lib.Model;
 using Backend.Lib.Storage;
 using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using System.Text.Json;
 
@@ -17,18 +18,47 @@ namespace Backend.Functions.Functions
             _logger = loggerFactory.CreateLogger<IoTHubIngestFunction>();
         }
 
+        // LOCAL DEV: Use this HTTP trigger when running locally
         [Function("IoTHubIngestFunction")]
         [SignalROutput(HubName = "%SIGNALR_HUB%")]
-        public async Task<IEnumerable<SignalRMessageAction>> RunAsync(
-    [EventHubTrigger("%IOTHUB_EVENTHUB_NAME%", Connection = "IoTHubConnectionString", IsBatched = true)]
-    IReadOnlyList<string> messages,
-    FunctionContext context)
+        public async Task<IEnumerable<SignalRMessageAction>> RunLocal(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "post", Route = "telemetry")] HttpRequestData req,
+            FunctionContext context)
+        {
+            _logger.LogInformation("LOCAL DEV: HTTP trigger received telemetry");
+
+            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+            var messages = new[] { requestBody };
+            return await ProcessMessagesAsync(messages);
+        }
+
+        // PRODUCTION: This is used when deployed to Azure
+        [Function("IoTHubIngestFunction_Prod")]
+        [SignalROutput(HubName = "%SIGNALR_HUB%")]
+        public async Task<IEnumerable<SignalRMessageAction>> RunProduction(
+            [EventHubTrigger("%IOTHUB_EVENTHUB_NAME%",
+                Connection = "IoTHubConnectionString",
+                ConsumerGroup = "$Default",
+                IsBatched = true)] IReadOnlyList<string> messages,
+            FunctionContext context)
+        {
+            _logger.LogInformation("PROD: IoT Hub batch received {Count} messages", messages.Count);
+            return await ProcessMessagesAsync(messages);
+        }
+
+        // Shared logic — used by both triggers
+        private async Task<List<SignalRMessageAction>> ProcessMessagesAsync(IReadOnlyList<string> messages)
         {
             var actions = new List<SignalRMessageAction>();
-            _logger.LogInformation("IoT Hub/EventHub batch received: {Count} messages", messages?.Count ?? 0);
 
             foreach (var message in messages)
             {
+                if (string.IsNullOrWhiteSpace(message))
+                {
+                    _logger.LogWarning("Empty message received");
+                    continue;
+                }
+
                 try
                 {
                     var payload = JsonSerializer.Deserialize<TelemetryPayload>(message, new JsonSerializerOptions
@@ -38,13 +68,13 @@ namespace Backend.Functions.Functions
 
                     if (payload == null)
                     {
-                        _logger.LogWarning("Telemetry payload was null");
+                        _logger.LogWarning("Failed to deserialize: payload is null");
                         continue;
                     }
 
                     if (string.IsNullOrWhiteSpace(payload.DeviceId))
                     {
-                        _logger.LogWarning("Telemetry missing DeviceId");
+                        _logger.LogWarning("Message missing DeviceId: {Message}", message);
                         continue;
                     }
 
@@ -53,9 +83,10 @@ namespace Backend.Functions.Functions
                     await _storage.InsertTimeseriesAsync(payload);
                     await _storage.UpsertLatestAsync(payload);
 
-                    _logger.LogInformation("Stored telemetry for device {DeviceId} at {Timestamp}", payload.DeviceId, payload.Timestamp);
+                    _logger.LogInformation("Stored telemetry for device {DeviceId} at {Timestamp}",
+                        payload.DeviceId, payload.Timestamp);
 
-                    // Prepare a SignalR broadcast for this payload
+                    // Broadcast to SignalR group for this device
                     actions.Add(new SignalRMessageAction("telemetryReceived")
                     {
                         GroupName = $"device:{payload.DeviceId}",
@@ -64,16 +95,15 @@ namespace Backend.Functions.Functions
                 }
                 catch (JsonException jex)
                 {
-                    _logger.LogWarning(jex, "Failed to parse telemetry JSON: {Message}", message);
+                    _logger.LogWarning(jex, "Invalid JSON received: {Message}", message);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error processing telemetry message");
+                    _logger.LogError(ex, "Error processing message");
                 }
             }
 
             return actions;
         }
-
     }
 }

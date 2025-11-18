@@ -1,7 +1,8 @@
-﻿using Backend.Lib.Storage;
+﻿using Azure.Messaging.EventHubs.Consumer;
+using Backend.Lib.Storage;
 using Microsoft.Azure.Functions.Worker;
-using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Azure.Functions.Worker.ApplicationInsights;
+using Microsoft.Azure.Functions.Worker.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -24,6 +25,7 @@ var host = new HostBuilder()
         {
             services.AddSingleton<IStorage, FileStorage>();
         }
+
     })
     .Build();
 
