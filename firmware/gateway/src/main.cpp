@@ -317,7 +317,8 @@ void startAPMode()
 void setupMesh()
 {
   // Only initialize mesh on NODE devices to avoid STA <-> mesh conflicts on Gateway.
-  if (g_mode != DeviceMode::NODE) {
+  if (g_mode != DeviceMode::NODE)
+  {
     g_meshInitialized = false;
     Serial.println("[MESH] Mesh disabled on Gateway for stability");
     return;
@@ -498,10 +499,34 @@ void forwardToIoTHub(const String &payload)
   else if (g_protocol == "sdk" && g_iotHubClient)
   {
     IOTHUB_MESSAGE_HANDLE msg = IoTHubMessage_CreateFromString(payload.c_str());
-    if (msg)
-      IoTHubClient_LL_SendEventAsync(g_iotHubClient, msg, nullptr, nullptr);
-#endif
+
+    if (msg == nullptr)
+    {
+      Serial.println("[AZURE] Failed to create IoT Hub message");
+      return;
+    }
+
+    Serial.print("[AZURE] Sending message: ");
+    Serial.println(payload.c_str());
+
+    IOTHUB_CLIENT_RESULT result =
+        IoTHubClient_LL_SendEventAsync(g_iotHubClient, msg, nullptr, nullptr);
+
+    if (result == IOTHUB_CLIENT_OK)
+    {
+      Serial.println("[AZURE] Message sent successfully");
+    }
+    else
+    {
+      Serial.print("[AZURE] Error sending message: ");
+      Serial.println(result); // prints numeric enum
+    }
+
+    // required after LL APIs
+    IoTHubMessage_Destroy(msg);
   }
+#endif
+
 }
 
 // void loadConfigFromSerial() {
@@ -550,28 +575,33 @@ void setup()
   g_bootCount++;
 
   // MOUNT LITTLEFS ONCE HERE
-Serial.println("[BOOT] Mounting LittleFS at /littlefs");
+  Serial.println("[BOOT] Mounting LittleFS at /littlefs");
 
-if (!LittleFS.begin(true, "/littlefs")) {
+  if (!LittleFS.begin(true, "/littlefs"))
+  {
     Serial.println("[BOOT] Format needed");
     LittleFS.format();
-    if (!LittleFS.begin(true, "/littlefs")) {
-        Serial.println("[BOOT] LittleFS FAILED");
-        while (1) delay(1000);
+    if (!LittleFS.begin(true, "/littlefs"))
+    {
+      Serial.println("[BOOT] LittleFS FAILED");
+      while (1)
+        delay(1000);
     }
     Serial.println("[BOOT] LittleFS formatted & mounted");
-} else {
+  }
+  else
+  {
     Serial.println("[BOOT] LittleFS mounted");
-}
+  }
 
-Serial.println("[DEBUG] LittleFS contents:");
-File root = LittleFS.open("/littlefs/");
-File file = root.openNextFile();
-while (file) {
-  Serial.printf("  %s (%u bytes)\n", file.name(), file.size());
-  file = root.openNextFile();
-}
-
+  Serial.println("[DEBUG] LittleFS contents:");
+  File root = LittleFS.open("/littlefs/");
+  File file = root.openNextFile();
+  while (file)
+  {
+    Serial.printf("  %s (%u bytes)\n", file.name(), file.size());
+    file = root.openNextFile();
+  }
 
   readConfig();
   Serial.printf("[BOOT] configValid = %d\n", g_configValid);
@@ -589,8 +619,8 @@ while (file) {
       startAPMode();
       return;
     }
-    //setupMesh();
-        // Gateway: do NOT initialize mesh to avoid STA/mesh conflicts (painlessMesh scan issues)
+    // setupMesh();
+    //  Gateway: do NOT initialize mesh to avoid STA/mesh conflicts (painlessMesh scan issues)
     g_meshInitialized = false;
 #ifdef ESP32
     setupIoTHub();
@@ -602,7 +632,8 @@ while (file) {
   {
     // NODE mode: connect STA (for optional internet) then start mesh
     WiFi.mode(WIFI_STA);
-    if (!connectSTA()) {
+    if (!connectSTA())
+    {
       // If STA fails still initialize mesh in node mode (mesh uses Wi-Fi AP/station internally)
       Serial.println("[SETUP] STA failed, proceeding to initialize mesh (NODE mode)");
     }
@@ -616,10 +647,11 @@ while (file) {
 // --- LOOP ---
 void loop()
 {
-  if (g_apMode) {
-        dnsServer.processNextRequest();
-    }
-      if (digitalRead(PIN_BOOT) == LOW && g_buttonPressTime == 0)
+  if (g_apMode)
+  {
+    dnsServer.processNextRequest();
+  }
+  if (digitalRead(PIN_BOOT) == LOW && g_buttonPressTime == 0)
     g_buttonPressTime = millis();
   if (digitalRead(PIN_BOOT) == LOW && millis() - g_buttonPressTime > 3000)
   {

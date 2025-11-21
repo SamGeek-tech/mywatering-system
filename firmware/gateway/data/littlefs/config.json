@@ -9,7 +9,6 @@
   "firmwareUrl":"",
   "sleepSeconds":60,
   "sensors":[
-    {"name":"Soil1","type":"cap_soil_moisture","pin":34,"air_value":2514,"water_value":950},
-    {"name":"DHT1","type":"dht22","pin":35}
+    {"name":"Soil1","type":"cap_soil_moisture","pin":34,"air_value":2514,"water_value":950}
   ]
 }
