@@ -7,8 +7,8 @@ pool:
   vmImage: 'windows-latest'
 
 variables:
-  functionAppName: 'watering-system-func'      # ← change to your real Function App name
-  azureSubscription: 'MyAzuresubscriptionTest'  # ← your ARM service connection name
+  functionAppName: 'watering-system-func'      
+  azureSubscription: 'MyServiceConnection'  # ←  ARM service connection name
 
 stages:
 - stage: Build
@@ -17,11 +17,15 @@ stages:
   - job: BuildAndPublish
     displayName: 'Build .NET 9 Isolated Function'
     steps:
+    # - task: UseDotNet@2
+    #   inputs:
+    #     packageType: 'sdk'
+    #     version: '9.0.x'
     - task: UseDotNet@2
+      displayName: 'Install .NET 10 SDK'
       inputs:
-        packageType: 'sdk'
-        version: '9.0.x'
-
+        version: '10.x'
+        includePreviewVersions: true
     - task: DotNetCoreCLI@2
       displayName: 'Restore'
       inputs:
