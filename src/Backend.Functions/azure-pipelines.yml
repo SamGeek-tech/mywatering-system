@@ -7,8 +7,8 @@ pool:
   vmImage: 'windows-latest'
 
 variables:
-  functionAppName: 'watering-system-func'      # ← change to your real Function App name
-  azureSubscription: 'MyAzuresubscriptionTest'  # ← your ARM service connection name
+  functionAppName: 'watering-system-func'      
+  azureSubscription: 'MyServiceConnection'  # ←  ARM service connection name
 
 stages:
 - stage: Build
