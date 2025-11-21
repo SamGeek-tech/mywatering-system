@@ -44,7 +44,7 @@ stages:
       inputs:
         command: 'publish'
         publishWebProjects: false
-        projects: '**/*FunctionApp.csproj'   # ← change if your project name differs
+        projects: '**/*Backend.Functions.csproj'
         arguments: '--configuration Release --output $(Build.ArtifactStagingDirectory)/app --no-build'
         zipAfterPublish: true
 
