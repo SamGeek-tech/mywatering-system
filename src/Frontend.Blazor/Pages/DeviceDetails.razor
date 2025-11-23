@@ -1,0 +1,162 @@
+@page "/device/{DeviceId}"
+@using Frontend.Blazor.Models
+@using Frontend.Blazor.Services
+@inject DeviceService DeviceService
+@inject NavigationManager Nav
+
+<PageTitle>Device Details - @DeviceId</PageTitle>
+
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <div style="display:flex; align-items:center; gap:1rem;">
+            <button class="btn-back" @onclick="GoBack">←</button>
+            <h1>@DeviceId</h1>
+        </div>
+        <div class="controls">
+            <div class="filter-group">
+                <label>From:</label>
+                <input type="datetime-local" @bind="FromDate" />
+            </div>
+            <div class="filter-group">
+                <label>To:</label>
+                <input type="datetime-local" @bind="ToDate" />
+            </div>
+            <button class="btn-refresh" @onclick="LoadHistory">Load History</button>
+        </div>
+    </div>
+
+    @if (IsLoading)
+    {
+        <div class="loading">Loading history...</div>
+    }
+    else if (History.Count == 0)
+    {
+        <div class="empty-state">No history found for this period.</div>
+    }
+    else
+    {
+        <div class="history-table-container">
+            <table class="history-table">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Moisture</th>
+                        <th>Battery</th>
+                        <th>RSSI</th>
+                        <th>Mesh Hops</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in History)
+                    {
+                        <tr>
+                            <td>@item.Timestamp.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                            <td>@(item.Moisture?.ToString("F1") ?? "-")%</td>
+                            <td>@(item.Battery?.ToString("F0") ?? "-")%</td>
+                            <td>@(item.Rssi?.ToString() ?? "-")</td>
+                            <td>@(item.MeshHopCount?.ToString() ?? "-")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+<style>
+    .btn-back {
+        background: none;
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        cursor: pointer;
+        font-size: 1.2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+    }
+    .btn-back:hover {
+        background: var(--bg-card);
+        border-color: var(--accent);
+    }
+    
+    .history-table-container {
+        background: var(--bg-card);
+        border-radius: 1rem;
+        border: 1px solid var(--border);
+        overflow: hidden;
+    }
+    
+    .history-table {
+        width: 100%;
+        border-collapse: collapse;
+        color: var(--text-primary);
+    }
+    
+    .history-table th, .history-table td {
+        padding: 1rem;
+        text-align: left;
+        border-bottom: 1px solid var(--border);
+    }
+    
+    .history-table th {
+        background: rgba(0,0,0,0.2);
+        font-weight: 600;
+        color: var(--text-secondary);
+        font-size: 0.9rem;
+        text-transform: uppercase;
+    }
+    
+    .history-table tr:last-child td {
+        border-bottom: none;
+    }
+    
+    .history-table tr:hover {
+        background: rgba(255,255,255,0.02);
+    }
+    
+    input[type="datetime-local"] {
+        background: var(--bg-dark);
+        border: 1px solid var(--border);
+        color: var(--text-primary);
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        font-family: inherit;
+    }
+</style>
+
+@code {
+    [Parameter] public string DeviceId { get; set; } = "";
+    
+    private List<TelemetryPayload> History = new();
+    private bool IsLoading = false;
+    private DateTime FromDate = DateTime.Now.AddHours(-24);
+    private DateTime ToDate = DateTime.Now;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadHistory();
+    }
+
+    private async Task LoadHistory()
+    {
+        IsLoading = true;
+        try
+        {
+            History = await DeviceService.GetTimeSeriesAsync(DeviceId, FromDate.ToUniversalTime(), ToDate.ToUniversalTime());
+            History = History.OrderByDescending(x => x.Timestamp).ToList();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private void GoBack()
+    {
+        Nav.NavigateTo("/");
+    }
+}

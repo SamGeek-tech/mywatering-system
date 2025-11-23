@@ -1,0 +1,54 @@
+@using Frontend.Blazor.Models
+@inject NavigationManager Nav
+
+<div class="device-card" @onclick="NavigateToDetails">
+    <div class="card-header">
+        <span class="device-id">@Device.DeviceId</span>
+        <span class="status-indicator @(IsActive ? "active" : "inactive")"></span>
+    </div>
+    
+    <div class="card-body">
+        <div class="metric">
+            <span class="label">Moisture</span>
+            <span class="value">@(Device.Moisture?.ToString("F1") ?? "N/A")<small>%</small></span>
+        </div>
+        
+        <div class="secondary-metrics">
+            <div class="metric-small">
+                <span class="icon">🔋</span>
+                <span>@(Device.Battery?.ToString("F0") ?? "-")%</span>
+            </div>
+            <div class="metric-small">
+                <span class="icon">📶</span>
+                <span>@(Device.Rssi?.ToString() ?? "-") dBm</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="card-footer">
+        <span class="last-seen">@LastSeenText</span>
+    </div>
+</div>
+
+@code {
+    [Parameter] public TelemetryPayload Device { get; set; } = new();
+
+    private bool IsActive => (DateTime.UtcNow - Device.Timestamp).TotalMinutes < 10;
+
+    private string LastSeenText
+    {
+        get
+        {
+            var diff = DateTime.UtcNow - Device.Timestamp;
+            if (diff.TotalSeconds < 60) return "Just now";
+            if (diff.TotalMinutes < 60) return $"{(int)diff.TotalMinutes}m ago";
+            if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+            return Device.Timestamp.ToString("MMM dd HH:mm");
+        }
+    }
+
+    private void NavigateToDetails()
+    {
+        Nav.NavigateTo($"/device/{Device.DeviceId}");
+    }
+}

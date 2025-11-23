@@ -1,0 +1,99 @@
+@page "/"
+@using Frontend.Blazor.Models
+@using Frontend.Blazor.Services
+@inject DeviceService DeviceService
+@implements IAsyncDisposable
+
+<PageTitle>Dashboard</PageTitle>
+
+<div class="dashboard-container">
+    <div class="dashboard-header">
+        <h1>Moisture Dashboard</h1>
+        <div class="controls">
+            <div class="filter-group">
+                <label>Max Moisture:</label>
+                <input type="range" min="0" max="100" @bind="MaxMoisture" @bind:event="oninput" />
+                <span>@MaxMoisture%</span>
+            </div>
+            <button class="btn-refresh" @onclick="RefreshAsync">Refresh</button>
+        </div>
+    </div>
+
+    @if (IsLoading)
+    {
+        <div class="loading">Loading devices...</div>
+    }
+    else if (Devices.Count == 0)
+    {
+        <div class="empty-state">No devices found.</div>
+    }
+    else
+    {
+        <div class="device-grid">
+            @foreach (var device in FilteredDevices)
+            {
+                <DeviceCard Device="device" @key="device.DeviceId" />
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<TelemetryPayload> Devices = new();
+    private bool IsLoading = true;
+    private int MaxMoisture = 100;
+
+    private IEnumerable<TelemetryPayload> FilteredDevices => 
+        Devices.Where(d => (d.Moisture ?? 0) <= MaxMoisture)
+               .OrderByDescending(d => d.Timestamp);
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshAsync();
+        
+        DeviceService.OnTelemetryReceived += HandleTelemetry;
+        await DeviceService.ConnectAsync();
+    }
+
+    private async Task RefreshAsync()
+    {
+        IsLoading = true;
+        try
+        {
+            Devices = await DeviceService.GetDevicesAsync();
+            // Join groups for all devices to get updates
+            foreach(var d in Devices)
+            {
+                await DeviceService.JoinDeviceGroupAsync(d.DeviceId);
+            }
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    private void HandleTelemetry(TelemetryPayload payload)
+    {
+        var existing = Devices.FirstOrDefault(d => d.DeviceId == payload.DeviceId);
+        if (existing != null)
+        {
+            // Update existing
+            Devices.Remove(existing);
+            Devices.Add(payload);
+        }
+        else
+        {
+            // Add new
+            Devices.Add(payload);
+            _ = DeviceService.JoinDeviceGroupAsync(payload.DeviceId);
+        }
+        StateHasChanged();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        DeviceService.OnTelemetryReceived -= HandleTelemetry;
+        await DeviceService.DisposeAsync();
+    }
+}
