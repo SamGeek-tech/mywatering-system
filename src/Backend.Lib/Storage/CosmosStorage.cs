@@ -19,18 +19,30 @@ namespace Backend.Lib.Storage
 
         public CosmosStorage(string connectionString, string databaseId = "watering_db", string timeseriesContainerId = "device_timeseries", string latestContainerId = "devices_latest")
         {
-            _client = new CosmosClient(connectionString);
+            // Use Gateway mode which is more firewall friendly (uses port 443)
+            var options = new CosmosClientOptions
+            {
+                ConnectionMode = ConnectionMode.Gateway
+            };
+            _client = new CosmosClient(connectionString, options);
             _databaseId = databaseId;
 
-            // Ensure DB and containers exist. In production handle RU and throughput accordingly.
-            var dbResponse = _client.CreateDatabaseIfNotExistsAsync(_databaseId).GetAwaiter().GetResult();
-            var database = dbResponse.Database;
-            database.CreateContainerIfNotExistsAsync(timeseriesContainerId, "/deviceId").GetAwaiter().GetResult();
-            database.CreateContainerIfNotExistsAsync(latestContainerId, "/deviceId").GetAwaiter().GetResult();
+            try
+            {
+                // Ensure DB and containers exist. In production handle RU and throughput accordingly.
+                var dbResponse = _client.CreateDatabaseIfNotExistsAsync(_databaseId).GetAwaiter().GetResult();
+                var database = dbResponse.Database;
+                database.CreateContainerIfNotExistsAsync(timeseriesContainerId, "/deviceId").GetAwaiter().GetResult();
+                database.CreateContainerIfNotExistsAsync(latestContainerId, "/deviceId").GetAwaiter().GetResult();
 
-            // assign containers
-            _timeseriesContainer = database.GetContainer(timeseriesContainerId);
-            _latestContainer = database.GetContainer(latestContainerId);
+                // assign containers
+                _timeseriesContainer = database.GetContainer(timeseriesContainerId);
+                _latestContainer = database.GetContainer(latestContainerId);
+            }
+            catch (CosmosException ex)
+            {
+                throw new Exception($"Failed to connect to Cosmos DB. Ensure your IP address is allowed in the Azure Portal Firewall settings. Error: {ex.Message}", ex);
+            }
         }
 
         public async Task InsertTimeseriesAsync(TelemetryPayload payload)
