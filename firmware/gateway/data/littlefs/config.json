@@ -4,7 +4,7 @@
   "PASSWORD":"test123$",
   "IOTHUB_HOST":"WateringSystem.azure-devices.net",
   "DEVICE_ID":"MyWaterGate",
-  "SAS_TOKEN":"sueFK1KOdXA327e91Obwhymt738Ds29L61xvW+NpN8Y=",
+  "SAS_TOKEN":"CTFrl2lO590kNIo2Bqes34xDrUsRtu3ae7rLwHyOkZE=",
   "PROTOCOL":"http",
   "firmwareUrl":"",
   "sleepSeconds":60,
