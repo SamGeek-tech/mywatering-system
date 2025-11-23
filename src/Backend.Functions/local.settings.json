@@ -6,10 +6,10 @@
     "AzureFunctionsJobHost__logging__LogLevel__Default": "Debug",
     "AzureFunctionsJobHost__logging__LogLevel__Host.Triggers.EventHub": "Trace",
     //"IoTHubConnectionString": "Endpoint=sb://...;SharedAccessKeyName=...",
-    //"IoTHubConnectionString": "Endpoint=sb://ihsuprodblres008dednamespace.servicebus.windows.net/;SharedAccessKeyName=iothubowner;SharedAccessKey=OztLBPu7k1ftj7bHWnFyTHga6pdWVSTIWAIoTDL6glE=;EntityPath=wateringsystem",
+    //"IoTHubConnectionString": "Endpoint=sb://ihsuproddmres008dednamespace.servicebus.windows.net/;SharedAccessKeyName=iothubowner;SharedAccessKey=Dc4+6JokxORPmDoxtzMilNsmUkeoHYoRzAIoTH8Qbt8=;EntityPath=iothub-ehub-wateringsy-65818922-fe8689eef1",
     //"IOTHUB_EVENTHUB_NAME": "iothub-ehub-yourhubname-xxxxxx-xxx",
-    "IOTHUB_EVENTHUB_NAME": "iothub-ehub-wateringsy-68907321-f1ab8d55e5",
+    "IOTHUB_EVENTHUB_NAME": "iothub-ehub-wateringsy-65818922-fe8689eef1",
     "SIGNALR_HUB": "telemetry",
-    "CosmosConnectionString": "AccountEndpoint=https://my-cosmo-db-watering.documents.azure.com:443/;AccountKey=KPnlAV9gkUDhnknTq73Q0HgsOTzDwuq6lkPdteulptHyw2NE4WnXBaxuQjOPmDpZs7IlUgJ2Yp6VACDb42bORg==;"
+    "CosmosConnectionString": "AccountEndpoint=https://my-cosmo-db-watering.documents.azure.com:443/;AccountKey=QXp4TV4K1L0Yfd0VaLXQMgPzZUruRzMysP6X2YfHLp7CoXHYSKQEby3O7z4JgBTjLU2r60Xk202XACDbjQCK3g==;"
   }
 }
