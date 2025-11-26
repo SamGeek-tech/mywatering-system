@@ -23,10 +23,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include <LittleFS.h>
-// #define FS_TYPE LittleFS
-// #define FS_OPEN(path, mode) LittleFS.open("/littlefs", mode)
-// #define FS_EXISTS(path) LittleFS.exists("/littlefs")
-// #define FS_REMOVE(path) LittleFS.remove("/littlefs")
 
 #if defined(ESP32)
 #include <WiFi.h>
@@ -37,7 +33,6 @@
 #include <HTTPUpdate.h>
 #include "AzureIotHub.h"
 #include "Esp32MQTTClient.h"
-// #define FS_BEGIN() LittleFS.begin(true, "/littlefs") // MOUNT AT ROOT
 #define RTC_ATTR RTC_DATA_ATTR
 #define HTTP_CLIENT HTTPClient
 #define WebRequest AsyncWebServerRequest
@@ -50,7 +45,6 @@
 #include <ESP8266httpUpdate.h>
 #include <ESP8266HTTPClient.h>
 #include <user_interface.h>
-// #define FS_BEGIN() LittleFS.begin()
 #define RTC_ATTR
 #define HTTP_CLIENT HTTPClient
 #define WebRequest AsyncWebServerRequest
@@ -378,10 +372,10 @@ void checkOTA()
 // --- WEB SERVER ---
 void setupWebServer()
 {
-  // 1. Serve static files (HTML, CSS, …)
+  // Serve static files (HTML, CSS, …)
   server.serveStatic("/", LittleFS, "/littlefs/").setDefaultFile("index.html");
-  // server.serveStatic("/style.css", LittleFS, "/littlefs/style.css");  // Explicit for CSS
-  //  2. GET current config (for auto-fill on page load)
+  
+  // GET current config (for auto-fill on page load)
   server.on("/get_config", HTTP_GET, [](AsyncWebServerRequest *request)
             {
     if (LittleFS.exists("/littlefs/config.json")) {
@@ -390,11 +384,11 @@ void setupWebServer()
       request->send(404, "text/plain", "No config yet");
     } });
 
-  // 3. POST new config → write to LittleFS and restart
+  // POST new config → write to LittleFS and restart
   server.on("/save_config", HTTP_POST, [](AsyncWebServerRequest *request)
             {
               // This runs when headers are received
-              request->send(200); // ACK immediately
+              request->send(200); 
             },
             nullptr, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
             {
@@ -492,10 +486,14 @@ void forwardToIoTHub(const String &payload)
     if (mqttClient.connected())
     {
       String topic = "devices/" + g_deviceId + "/messages/events/";
-      mqttClient.publish(topic.c_str(), payload.c_str());
+      bool success = mqttClient.publish(topic.c_str(), payload.c_str());
+      Serial.print("[MQTT] Sending message: ");
+      Serial.println(payload.c_str());
+      Serial.print("[MQTT] Publish result: ");
+      Serial.println(success ? "OK" : "FAIL");
     }
-#ifdef ESP32
   }
+#ifdef ESP32
   else if (g_protocol == "sdk" && g_iotHubClient)
   {
     IOTHUB_MESSAGE_HANDLE msg = IoTHubMessage_CreateFromString(payload.c_str());
@@ -526,15 +524,7 @@ void forwardToIoTHub(const String &payload)
     IoTHubMessage_Destroy(msg);
   }
 #endif
-
 }
-
-// void loadConfigFromSerial() {
-//   Serial.println("[CONFIG] Enter JSON config, end with a blank line:");
-//   String jsonStr = "";
-//   unsigned long start = millis();
-//   while (millis() - start < 30000) {  // 30s timeout
-//     while (Serial.available()) {
 //       char c = Serial.read();
 //       if (c == '\n' && jsonStr.endsWith("\n")) break;  // double newline ends input
 //       jsonStr += c;
@@ -668,7 +658,7 @@ void loop()
   {
     mesh.update();
   }
-  // === GATEWAY: READ OWN SENSORS EVERY 60 SECONDS ===
+  // === GATEWAY: READ OWN SENSORS EVERY 100 SECONDS ===
   static unsigned long lastSensorRead = 0;
   // Serial.printf("[GATEWAY] g_mode: %s, g_configValid: %d, time_since_last: %lu, send_now: %d\n",
   //               (g_mode == DeviceMode::GATEWAY ? "GATEWAY" : "NODE"),
