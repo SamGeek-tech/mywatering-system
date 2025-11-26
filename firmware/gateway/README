@@ -1,13 +1,47 @@
-Build filesystem image:
+# MyWatering Project
 
+## Overview
+This project is an early-stage IoT application designed for dynamic sensor monitoring and automation. The system allows for flexible configuration, enabling users to dynamically select which pins are connected to specific sensor types.
+
+## Architecture
+The system is built on a mesh network architecture integrated with Azure Cloud services:
+
+*   **Firmware**: Runs on ESP32 and ESP8266 devices.
+*   **Mesh Network**: Utilizes `painlessMesh` for robust communication.
+    *   **Nodes**: Collect data from connected sensors and relay it through the mesh.
+    *   **Gateway**: Receives data from nodes and transmits it to the cloud.
+*   **Cloud Backend**:
+    *   **Azure IoT Hub**: Ingests telemetry data from the Gateway.
+    *   **Azure Functions**: Triggered by IoT Hub events to process incoming data.
+    *   **Azure Cosmos DB**: Stores processed sensor data.
+*   **Frontend**: A web application (Blazor and React versions currently in development) to visualize data with charts and dashboards.
+
+## Hardware Support
+*   **Supported**: ESP32 Dev Module, Wemos D1 Mini ESP32.
+*   **Planned**: ESP-01.
+
+## Features
+*   **Dynamic Pin Configuration**: Easily map sensors to specific pins via configuration.
+*   **Mesh Networking**: Extends range and reliability through node-to-node communication.
+*   **Cloud Integration**: Real-time data streaming to Azure.
+
+## Future Plans
+*   **Automation Rules**: Implement threshold-based actions (e.g., if soil moisture is low, turn on pump; if temperature is high, turn on fan/heater).
+*   **Expanded Hardware Support**: Support for additional ESP variants and sensor types.
+
+## Build & Upload Commands
+
+### Build filesystem image
+```bash
 pio run -t buildfs -e d1_mini32
+```
 
-
-Upload filesystem:
-
+### Upload filesystem
+```bash
 pio run -t uploadfs -e d1_mini32
+```
 
-
-Upload firmware:
-
+### Upload firmware
+```bash
 pio run -t upload -e d1_mini32
+```
